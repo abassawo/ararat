@@ -49,6 +49,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
+import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
@@ -57,7 +58,6 @@ import android.widget.Scroller;
 import org.akop.ararat.R;
 import org.akop.ararat.core.Crossword;
 import org.akop.ararat.core.CrosswordState;
-import org.akop.ararat.view.inputmethod.CrosswordInputConnection;
 import org.akop.ararat.widget.Zoomer;
 
 import java.util.Stack;
@@ -196,76 +196,7 @@ public class CrosswordView
 	private OnStateChangeListener mStateChangeListener;
 	private OnLongPressListener mLongpressListener;
 
-	private CrosswordInputConnection.OnInputEventListener mInputEventListener
-			= new CrosswordInputConnection.OnInputEventListener()
-	{
-		@Override
-		public void onWordEntered(CharSequence text)
-		{
-			if (text != null && mSelection != null) {
-				// Words like "ain't" contain punctuation marks that ain't
-				// valid, but may appear in a crossword in punctuation-less
-				// form. For this reason, we strip out invalid characters
-				// before considering whether we want to fill them into the
-				// selection.
-				char[] chars = text.toString().toCharArray();
-
-				// Copy all acceptable chars to a separate array
-				String[] filtered = new String[chars.length];
-				int k = 0;
-				for (char ch: chars) {
-					if (isAcceptableChar(ch)) {
-						filtered[k++] = String.valueOf(ch);
-					}
-				}
-
-				if (k == 0) {
-					return; // No valid chars
-				}
-
-				String[][] matrix;
-				if (mSelection.getDirection() == Crossword.Word.DIR_ACROSS) {
-					matrix = new String[1][k];
-					System.arraycopy(filtered, 0, matrix[0], 0, k);
-				} else {
-					matrix = new String[k][1];
-					for (int i = 0; i < k; i++) {
-						matrix[i][0] = filtered[i];
-					}
-				}
-
-				Selectable s = null;
-				if (mSelection.isCellWithinBounds(mSelection.mCell + k - 1)) {
-					// If there's enough room at the current position, add the new word
-					setChars(mSelection.getRow(), mSelection.getColumn(), matrix, false);
-					s = new Selectable(mSelection.mWord,
-							Math.min(mSelection.mCell + k, mSelection.mWord.getLength() - 1));
-				} else if (k == mSelection.mWord.getLength()) {
-					// Not enough room from the current, but perfect fit for the entire row/col
-					setChars(mSelection.getRow(0), mSelection.getColumn(0), matrix, false);
-					s = new Selectable(mSelection.mWord, k - 1);
-				}
-
-				if (s != null) {
-					resetSelection(s);
-				}
-			}
-		}
-
-		@Override
-		public void onWordCancelled()
-		{
-			handleBackspace();
-		}
-
-		@Override
-		public void onEditorAction(int actionCode)
-		{
-			if (actionCode == EditorInfo.IME_ACTION_NEXT) {
-				selectNextWord();
-			}
-		}
-	};
+	private InputConnection mInputConnection;
 
 	public CrosswordView(Context context, AttributeSet attrs)
 	{
@@ -493,21 +424,20 @@ public class CrosswordView
 	{
 		Log.v(LOG_TAG, "onCreateInputConnection()");
 
-		CrosswordInputConnection inputConnection = null;
+		mInputConnection = new SwipableInputConnection(this);
+
 		if (mSoftInputEnabled) {
 			outAttrs.actionLabel = null;
-			outAttrs.inputType = InputType.TYPE_NULL;
+			outAttrs.inputType = mInputConnection instanceof BasicInputConnection
+					? InputType.TYPE_NULL : InputType.TYPE_CLASS_TEXT;
 			outAttrs.imeOptions |= EditorInfo.IME_FLAG_NO_FULLSCREEN;
 			outAttrs.imeOptions |= EditorInfo.IME_FLAG_NO_EXTRACT_UI;
 			outAttrs.imeOptions &= ~EditorInfo.IME_MASK_ACTION;
 			outAttrs.imeOptions |= EditorInfo.IME_ACTION_NEXT;
 			outAttrs.packageName = getContext().getPackageName();
-
-			inputConnection = new CrosswordInputConnection(this);
-			inputConnection.setOnInputEventListener(mInputEventListener);
 		}
 
-		return inputConnection;
+		return mInputConnection;
 	}
 
 	@Override
@@ -1544,6 +1474,9 @@ public class CrosswordView
 
 		// Set new selection
 		mSelection = selection;
+		if (mInputConnection instanceof SwipableInputConnection) {
+			((SwipableInputConnection) mInputConnection).mSel = selection;
+		}
 
 		if (mPuzzleCanvas != null) {
 			// Bring new selection into view, if requested
@@ -2520,6 +2453,157 @@ public class CrosswordView
 					minX, maxX, minY, maxY);
 
 			return true;
+		}
+	}
+
+	private class BasicInputConnection
+			extends BaseInputConnection
+	{
+		public BasicInputConnection(View targetView)
+		{
+			super(targetView, false);
+		}
+
+		@Override
+		public boolean commitText(CharSequence text, int newCursorPosition)
+		{
+			handleBackspace();
+
+			return super.commitText(text, newCursorPosition);
+		}
+
+		@Override
+		public boolean setComposingText(CharSequence text, int newCursorPosition)
+		{
+			if (text != null && mSelection != null) {
+				// Words like "ain't" contain punctuation marks that ain't
+				// valid, but may appear in a crossword in punctuation-less
+				// form. For this reason, we strip out invalid characters
+				// before considering whether we want to fill them into the
+				// selection.
+				char[] chars = text.toString().toCharArray();
+
+				// Copy all acceptable chars to a separate array
+				String[] filtered = new String[chars.length];
+				int k = 0;
+				for (char ch: chars) {
+					if (isAcceptableChar(ch)) {
+						filtered[k++] = String.valueOf(ch);
+					}
+				}
+
+				if (k != 0) {
+					String[][] matrix;
+					if (mSelection.getDirection() == Crossword.Word.DIR_ACROSS) {
+						matrix = new String[1][k];
+						System.arraycopy(filtered, 0, matrix[0], 0, k);
+					} else {
+						matrix = new String[k][1];
+						for (int i = 0; i < k; i++) {
+							matrix[i][0] = filtered[i];
+						}
+					}
+
+					Selectable s = null;
+					if (mSelection.isCellWithinBounds(mSelection.mCell + k - 1)) {
+						// If there's enough room at the current position, add the new word
+						setChars(mSelection.getRow(), mSelection.getColumn(), matrix, false);
+						s = new Selectable(mSelection.mWord,
+								Math.min(mSelection.mCell + k, mSelection.mWord.getLength() - 1));
+					} else if (k == mSelection.mWord.getLength()) {
+						// Not enough room from the current, but perfect fit for the entire row/col
+						setChars(mSelection.getRow(0), mSelection.getColumn(0), matrix, false);
+						s = new Selectable(mSelection.mWord, k - 1);
+					}
+
+					if (s != null) {
+						resetSelection(s);
+					}
+				}
+			}
+
+			return super.setComposingText(text, newCursorPosition);
+		}
+
+		@Override
+		public boolean performEditorAction(int actionCode)
+		{
+			if (actionCode == EditorInfo.IME_ACTION_NEXT) {
+				selectNextWord();
+			}
+
+			return super.performEditorAction(actionCode);
+		}
+	}
+
+	private class SwipableInputConnection
+			extends BaseInputConnection
+	{
+		private Selectable mSel;
+
+		public SwipableInputConnection(View targetView)
+		{
+			super(targetView, false);
+		}
+
+		@Override
+		public boolean commitText(CharSequence text, int newCursorPosition)
+		{
+			Log.v(LOG_TAG, String.format("commitText %s, %d", text, newCursorPosition));
+
+			if (mSel != null) {
+				Selectable sel = new Selectable(mSel);
+				sel.mCell += text.length();
+
+				resetSelection(sel);
+			}
+
+//			mSel = mSelection;
+
+			return super.commitText(text, newCursorPosition);
+		}
+
+		@Override
+		public boolean performEditorAction(int actionCode)
+		{
+			Log.v(LOG_TAG, String.format("performEditorAction %d", actionCode));
+
+			return super.performEditorAction(actionCode);
+		}
+
+		@Override
+		public boolean setComposingText(CharSequence text, int newCursorPosition)
+		{
+			Log.v(LOG_TAG, String.format("setComposingText %s,%d", text, newCursorPosition));
+
+			if (mSel != null) {
+				replaceText(text);
+			}
+
+			return super.setComposingText(text, newCursorPosition);
+		}
+
+		private void replaceText(CharSequence text)
+		{
+			String matrix[][];
+			int wordLen = text.length();
+
+			if (mSel.getDirection() == Crossword.Word.DIR_ACROSS) {
+				matrix = new String[1][wordLen];
+				for (int i = 0; i < wordLen; i++) {
+					matrix[0][i] = text.charAt(i) + "";
+				}
+			} else if (mSel.getDirection() == Crossword.Word.DIR_DOWN) {
+				matrix = new String[wordLen][1];
+				for (int i = 0; i < wordLen; i++) {
+					matrix[i][0] = text.charAt(i) + "";
+				}
+			} else {
+				throw new IllegalArgumentException("Word direction not valid");
+			}
+
+			setChars(mSel.getRow(), mSel.getColumn(),
+					matrix, false);
 		}
 	}
 }
