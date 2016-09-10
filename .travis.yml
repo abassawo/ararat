@@ -4,10 +4,12 @@ sudo: false
 
 android:
   components:
-    - platform-tools
     - tools
+    - platform-tools
     - build-tools-24.0.0
     - android-24
+    - extra-android-m2repository
+    - extra-android-support
 
 script:
   - ./gradlew test --console=plain
