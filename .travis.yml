@@ -11,3 +11,6 @@ android:
 
 script:
   - ./gradlew test --console=plain
+
+after_success:
+  - ./gradlew :meter:coveralls --console=plain
