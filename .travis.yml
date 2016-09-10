@@ -8,11 +8,6 @@ android:
     - platform-tools
     - build-tools-24.0.0
     - android-24
-    - extra-android-m2repository
-    - extra-android-support
 
 script:
   - ./gradlew test --console=plain
-
-after_success:
-  - ./gradlew :meter:coveralls --console=plain
